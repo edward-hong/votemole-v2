@@ -1,0 +1,9 @@
+{
+  "name": "votemole-v2",
+  "version": "1.0.0",
+  "description": "A polling app made with the PERN stack",
+  "main": "index.js",
+  "author": "Edward Hong",
+  "license": "MIT",
+  "private": false
+}
