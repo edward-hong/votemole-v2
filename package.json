@@ -9,10 +9,11 @@
   "private": false,
   "scripts": {
     "dev:ts": "tsc --watch",
-    "dev:sever": "nodemon server/dist/index.js",
+    "dev:server": "nodemon server/dist/index.js",
     "dev": "run-p dev:*",
     "lint": "eslint --ignore-path .eslintignore",
-    "format": "prettier --ignore-path .gitignore --write \"**/*.+(js|ts|json)\""
+    "format": "prettier --ignore-path .gitignore --write \"**/*.+(js|ts|json)\"",
+    "configuredb": "./server/src/configureDb.bash"
   },
   "devDependencies": {
     "@types/express": "^4.17.13",
