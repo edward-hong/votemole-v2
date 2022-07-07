@@ -11,22 +11,40 @@
     "dev:ts": "tsc --watch",
     "dev:server": "nodemon server/dist/index.js",
     "dev": "run-p dev:*",
+    "clean": "rimraf server/dist/",
+    "copy-files": "copyfiles server/src/.env ./server/dist/ -f",
+    "compile": "yarn clean && tsc && yarn copy-files",
     "lint": "eslint --ignore-path .eslintignore",
     "format": "prettier --ignore-path .gitignore --write \"**/*.+(js|ts|json)\"",
     "configuredb": "./server/src/configureDb.bash"
   },
   "devDependencies": {
+    "@types/connect-pg-simple": "^7.0.0",
     "@types/express": "^4.17.13",
+    "@types/express-session": "^1.17.5",
+    "@types/passport": "^1.0.9",
+    "@types/passport-google-oauth20": "^2.0.11",
+    "@types/pg": "^8.6.5",
+    "@types/request-ip": "^0.0.37",
     "@typescript-eslint/eslint-plugin": "^5.29.0",
     "@typescript-eslint/parser": "^5.29.0",
+    "copyfiles": "^2.4.1",
     "eslint": "^8.18.0",
     "eslint-config-prettier": "^8.5.0",
     "nodemon": "^2.0.16",
     "npm-run-all": "^4.1.5",
     "prettier": "^2.7.1",
+    "rimraf": "^3.0.2",
     "typescript": "^4.7.4"
   },
   "dependencies": {
-    "express": "^4.18.1"
+    "connect-pg-simple": "^7.0.0",
+    "dotenv": "^16.0.1",
+    "express": "^4.18.1",
+    "express-session": "^1.17.3",
+    "passport": "^0.6.0",
+    "passport-google-oauth20": "^2.0.0",
+    "pg": "^8.7.3",
+    "request-ip": "^3.3.0"
   }
 }
