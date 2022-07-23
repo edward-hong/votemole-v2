@@ -5,3 +5,6 @@ CREATE TABLE pollOption(
   "pollId"    uuid,
   FOREIGN KEY ("pollId") REFERENCES poll(id)
 );
+
+ALTER TABLE pollOption
+  ADD CONSTRAINT uniqueOption UNIQUE(option, "pollId");

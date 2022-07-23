@@ -5,8 +5,9 @@ import session, { SessionOptions } from 'express-session'
 import connectPg from 'connect-pg-simple'
 import requestIp from 'request-ip'
 
-import pool from './databasePool'
-import authRoutes from './routes/authRoutes'
+import authRoutes from './routes/auth'
+import pollRoutes from './routes/poll'
+import { errorHandler } from './middlewares/error'
 import './auth/setupPassport'
 
 dotenv.config({ path: __dirname + '/.env' })
@@ -43,6 +44,9 @@ app.use(passport.initialize())
 app.use(passport.session())
 
 app.use('/auth', authRoutes)
+app.use('/poll', pollRoutes)
+
+app.use(errorHandler)
 
 const port = PORT || 5000
 

@@ -1,7 +1,11 @@
 import * as dotenv from 'dotenv'
 import path from 'path'
 import passport from 'passport'
-import { Strategy as GoogleStrategy } from 'passport-google-oauth20'
+import {
+  Strategy as GoogleStrategy,
+  Profile,
+  VerifyCallback,
+} from 'passport-google-oauth20'
 
 import pool from '../databasePool'
 
@@ -22,10 +26,10 @@ passport.deserializeUser((user: string, done) => {
 // or create new user
 
 const login = async (
-  _accessToken: any,
-  _refreshToken: any,
-  profile: { id: any },
-  done: any
+  _accessToken: string,
+  _refreshToken: string,
+  profile: Profile,
+  done: VerifyCallback
 ) => {
   const client = await pool.connect()
 
