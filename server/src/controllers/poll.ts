@@ -2,7 +2,6 @@ import { NextFunction, Request, Response } from 'express'
 
 import pool from '../databasePool'
 
-// Calculate the offset and limit from req.query
 const getOffset = (req: Request) =>
   req.query.offset ? parseInt(req.query.offset as string, 10) : 0
 
@@ -17,17 +16,19 @@ export const findPolls = async (req: Request, res: Response) => {
 
   const client = await pool.connect()
 
-  const pollsPromise = client.query(
-    `SELECT * FROM poll  ${
-      req.params.id ? `WHERE "accountId"=$3` : ''
-    } LIMIT $1 OFFSET $2;`,
-    [limit, offset, req.params.id]
-  )
-  const countPromise = client.query(`SELECT COUNT(*) FROM poll`)
+  const response = req.params.id
+    ? await client.query(
+        `SELECT * FROM poll  ${
+          req.params.id ? `WHERE "accountId"=$3` : ''
+        } LIMIT $1 OFFSET $2;`,
+        [limit, offset, req.params.id]
+      )
+    : await client.query('SELECT * FROM poll LIMIT $1 OFFSET $2;', [
+        limit,
+        offset,
+      ])
 
-  const [polls, count] = await Promise.all([pollsPromise, countPromise])
-
-  res.json({ count: parseInt(count.rows[0].count), polls: polls.rows })
+  res.json({ count: response.rowCount, polls: response.rows })
 
   client.release()
 }
@@ -36,11 +37,11 @@ export const findPoll = async (req: Request, res: Response) => {
   const client = await pool.connect()
 
   const response = await client.query(
-    `SELECT * FROM poll p JOIN pollOption o ON p.id=o."pollId" JOIN ip i ON p.id=i."pollId" WHERE p.id=$1;`,
+    `SELECT * FROM poll p JOIN pollOption o ON p.id=o."pollId" WHERE p.id=$1;`,
     [req.params.id]
   )
 
-  response.rows.length > 0
+  response.rowCount > 0
     ? res.json({ poll: response.rows })
     : res.status(404).json({ msg: 'Poll does not exist' })
 
@@ -60,7 +61,7 @@ export const submitPoll = async (
       [req.body.accountId, req.body.pollQuestion]
     )
 
-    if (response.rows.length > 0) {
+    if (response.rowCount > 0) {
       res.status(406).send('Poll already exists')
     } else {
       const insertPollRes = await client.query(
@@ -90,25 +91,62 @@ export const submitPoll = async (
 export const vote = async (req: Request, res: Response) => {
   const client = await pool.connect()
 
-  if (req.body.selection === 'custom') {
-    const insertPollOptionPromise = client.query(
-      `INSERT INTO pollOption(option, votes, "pollId") VALUES ($1, 1, $2);`,
-      [req.body.customSelection, req.body.pollId]
-    )
+  const ipResponse = await client.query(
+    `SELECT * FROM ip WHERE "pollId"=$1 AND ip.ip=$2;`,
+    [req.body.pollId, req.clientIp]
+  )
 
-    const insertIpPromise = client.query(
-      `INSERT INTO ip(ip, "pollId") VALUES ($1, $2);`,
-      [req.clientIp, req.body.pollId]
-    )
+  if (ipResponse.rowCount > 0) {
+    res.status(403).json({ msg: 'You have already voted on this poll' })
+  } else {
+    if (req.body.selection === 'custom') {
+      const pollOptionResponse = await client.query(
+        `SELECT * FROM pollOption WHERE option=$1 AND "pollId"=$2;`,
+        [req.body.customSelection, req.body.pollId]
+      )
 
-    await Promise.all([insertPollOptionPromise, insertIpPromise])
+      if (pollOptionResponse.rowCount > 0) {
+        res.status(403).json({ msg: 'Custom option already exists' })
+      } else {
+        const insertPollOptionPromise = client.query(
+          `INSERT INTO pollOption(option, votes, "pollId") VALUES ($1, 1, $2);`,
+          [req.body.customSelection, req.body.pollId]
+        )
 
-    const response = await client.query(
-      `SELECT * FROM poll p JOIN pollOption o ON p.id=o."pollId" JOIN ip i ON p.id=i."pollId" WHERE p.id=$1;`,
-      [req.body.pollId]
-    )
+        const insertIpPromise = client.query(
+          `INSERT INTO ip(ip, "pollId") VALUES ($1, $2);`,
+          [req.clientIp, req.body.pollId]
+        )
 
-    res.json({ msg: 'Vote Submitted', poll: response.rows })
+        await Promise.all([insertPollOptionPromise, insertIpPromise])
+
+        const response = await client.query(
+          `SELECT * FROM poll p JOIN pollOption o ON p.id=o."pollId" WHERE p.id=$1;`,
+          [req.body.pollId]
+        )
+
+        res.json({ msg: 'Vote Submitted', poll: response.rows })
+      }
+    } else {
+      const updatePollVotePromise = client.query(
+        `UPDATE pollOption SET votes = votes + 1 WHERE option=$1 AND "pollId"=$2;`,
+        [req.body.selection, req.body.pollId]
+      )
+
+      const insertIpPromise = client.query(
+        `INSERT INTO ip(ip, "pollId") VALUES ($1, $2);`,
+        [req.clientIp, req.body.pollId]
+      )
+
+      await Promise.all([updatePollVotePromise, insertIpPromise])
+
+      const response = await client.query(
+        `SELECT * FROM poll p JOIN pollOption o ON p.id=o."pollId" WHERE p.id=$1;`,
+        [req.body.pollId]
+      )
+
+      res.json({ msg: 'Vote Submitted', poll: response.rows })
+    }
   }
 
   client.release()

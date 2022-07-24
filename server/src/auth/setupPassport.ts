@@ -38,7 +38,7 @@ const login = async (
     [profile.id]
   )
 
-  if (response.rows.length > 0) {
+  if (response.rowCount > 0) {
     done(null, response.rows[0])
   } else {
     await client.query(`INSERT INTO account("profileId") VALUES ($1)`, [
@@ -46,7 +46,7 @@ const login = async (
     ])
   }
 
-  await pool.end()
+  await client.release()
 }
 
 // Google Strategy
