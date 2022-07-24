@@ -3,7 +3,7 @@ CREATE TABLE pollOption(
   option      VARCHAR(512) NOT NULL,
   votes       INTEGER DEFAULT 0 NOT NULL,
   "pollId"    uuid,
-  FOREIGN KEY ("pollId") REFERENCES poll(id)
+  FOREIGN KEY ("pollId") REFERENCES poll(id) ON DELETE CASCADE
 );
 
 ALTER TABLE pollOption

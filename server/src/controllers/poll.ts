@@ -145,9 +145,19 @@ export const vote = async (req: Request, res: Response) => {
         [req.body.pollId]
       )
 
-      res.json({ msg: 'Vote Submitted', poll: response.rows })
+      res.json({ msg: 'Vote submitted', poll: response.rows })
     }
   }
+
+  client.release()
+}
+
+export const deletePoll = async (req: Request, res: Response) => {
+  const client = await pool.connect()
+
+  await client.query(`DELETE FROM poll WHERE id=$1`, [req.params.id])
+
+  res.json({ msg: 'Poll deleted' })
 
   client.release()
 }

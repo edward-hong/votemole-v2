@@ -44,6 +44,13 @@ const login = async (
     await client.query(`INSERT INTO account("profileId") VALUES ($1)`, [
       profile.id,
     ])
+
+    const response = await client.query(
+      `SELECT * FROM account WHERE "profileId"=$1;`,
+      [profile.id]
+    )
+
+    done(null, response.rows[0])
   }
 
   await client.release()
