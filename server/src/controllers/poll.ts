@@ -1,6 +1,13 @@
+import * as dotenv from 'dotenv'
+import path from 'path'
 import { NextFunction, Request, Response } from 'express'
+import { createClient } from 'redis'
 
 import pool from '../databasePool'
+
+dotenv.config({ path: path.resolve(__dirname, '..', '.env') })
+
+const redisClient = createClient({ url: process.env.REDIS_URL as string })
 
 const getOffset = (req: Request) =>
   req.query.offset ? parseInt(req.query.offset as string, 10) : 0
@@ -10,42 +17,78 @@ const getLimit = (req: Request) => {
   return limit > 50 ? 50 : limit
 }
 
-export const findPolls = async (req: Request, res: Response) => {
+export const findPolls = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
   const offset = getOffset(req)
   const limit = getLimit(req)
 
-  const client = await pool.connect()
+  const pgClient = await pool.connect()
+  await redisClient.connect()
 
-  const response = req.params.id
-    ? await client.query(
-        `SELECT * FROM poll  ${
-          req.params.id ? `WHERE "accountId"=$3` : ''
-        } LIMIT $1 OFFSET $2;`,
-        [limit, offset, req.params.id]
-      )
-    : await client.query('SELECT * FROM poll LIMIT $1 OFFSET $2;', [
-        limit,
-        offset,
-      ])
+  const redisKey = req.params.id ? `userPolls:${req.params.id}` : `allPolls`
 
-  res.json({ count: response.rowCount, polls: response.rows })
+  const getCountFromRedis = redisClient.hGet(redisKey, 'polls')
+  const getPollsFromRedis = redisClient.hGet(redisKey, 'count')
 
-  client.release()
+  try {
+    const [polls, count] = await Promise.all([
+      getCountFromRedis,
+      getPollsFromRedis,
+    ])
+
+    if (typeof polls === 'string') {
+      res.json({
+        count: parseInt(count as string, 10),
+        polls: JSON.parse(polls),
+      })
+    } else {
+      const response = req.params.id
+        ? await pgClient.query(
+            `SELECT * FROM poll WHERE "accountId"=$3 LIMIT $1 OFFSET $2;`,
+            [limit, offset, req.params.id]
+          )
+        : await pgClient.query('SELECT * FROM poll LIMIT $1 OFFSET $2;', [
+            limit,
+            offset,
+          ])
+
+      await redisClient.hSet(redisKey, 'count', response.rowCount)
+      await redisClient.hSet(redisKey, 'polls', JSON.stringify(response.rows))
+
+      res.json({ count: response.rowCount, polls: response.rows })
+    }
+  } catch (err) {
+    next(err)
+  }
+
+  pgClient.release()
+  await redisClient.quit()
 }
 
-export const findPoll = async (req: Request, res: Response) => {
-  const client = await pool.connect()
+export const findPoll = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  const pgClient = await pool.connect()
 
-  const response = await client.query(
-    `SELECT * FROM poll p JOIN pollOption o ON p.id=o."pollId" WHERE p.id=$1;`,
-    [req.params.id]
-  )
+  try {
+    const response = await pgClient.query(
+      `SELECT * FROM poll p JOIN pollOption o ON p.id=o."pollId" WHERE p.id=$1;`,
+      [req.params.id]
+    )
 
-  response.rowCount > 0
-    ? res.json({ poll: response.rows })
-    : res.status(404).json({ msg: 'Poll does not exist' })
+    response.rowCount > 0
+      ? res.json({ poll: response.rows })
+      : res.status(404).json({ msg: 'Poll does not exist' })
+  } catch (err) {
+    next(err)
+  }
 
-  client.release()
+  pgClient.release()
 }
 
 export const submitPoll = async (
@@ -53,10 +96,11 @@ export const submitPoll = async (
   res: Response,
   next: NextFunction
 ) => {
-  const client = await pool.connect()
+  const pgClient = await pool.connect()
+  await redisClient.connect()
 
   try {
-    const response = await client.query(
+    const response = await pgClient.query(
       `SELECT * FROM poll WHERE "accountId"=$1 AND "pollQuestion"=$2;`,
       [req.body.accountId, req.body.pollQuestion]
     )
@@ -64,7 +108,9 @@ export const submitPoll = async (
     if (response.rowCount > 0) {
       res.status(406).send('Poll already exists')
     } else {
-      const insertPollRes = await client.query(
+      await redisClient.flushAll()
+
+      const insertPollRes = await pgClient.query(
         `INSERT INTO poll("pollQuestion", "accountId") VALUES ($1, $2) RETURNING id;`,
         [req.body.pollQuestion, req.body.accountId]
       )
@@ -72,7 +118,7 @@ export const submitPoll = async (
 
       await Promise.all(
         req.body.pollOptions.map(({ option }: { option: string }) =>
-          client.query(
+          pgClient.query(
             `INSERT INTO pollOption(option, "pollId") VALUES ($1, $2);`,
             [option, pollId]
           )
@@ -85,79 +131,96 @@ export const submitPoll = async (
     next(err)
   }
 
-  client.release()
+  pgClient.release()
+  await redisClient.quit()
 }
 
-export const vote = async (req: Request, res: Response) => {
-  const client = await pool.connect()
+export const vote = async (req: Request, res: Response, next: NextFunction) => {
+  const pgClient = await pool.connect()
 
-  const ipResponse = await client.query(
-    `SELECT * FROM ip WHERE "pollId"=$1 AND ip.ip=$2;`,
-    [req.body.pollId, req.clientIp]
-  )
+  try {
+    const ipResponse = await pgClient.query(
+      `SELECT * FROM ip WHERE "pollId"=$1 AND ip.ip=$2;`,
+      [req.body.pollId, req.clientIp]
+    )
 
-  if (ipResponse.rowCount > 0) {
-    res.status(403).json({ msg: 'You have already voted on this poll' })
-  } else {
-    if (req.body.selection === 'custom') {
-      const pollOptionResponse = await client.query(
-        `SELECT * FROM pollOption WHERE option=$1 AND "pollId"=$2;`,
-        [req.body.customSelection, req.body.pollId]
-      )
-
-      if (pollOptionResponse.rowCount > 0) {
-        res.status(403).json({ msg: 'Custom option already exists' })
-      } else {
-        const insertPollOptionPromise = client.query(
-          `INSERT INTO pollOption(option, votes, "pollId") VALUES ($1, 1, $2);`,
+    if (ipResponse.rowCount > 0) {
+      res.status(403).json({ msg: 'You have already voted on this poll' })
+    } else {
+      if (req.body.selection === 'custom') {
+        const pollOptionResponse = await pgClient.query(
+          `SELECT * FROM pollOption WHERE option=$1 AND "pollId"=$2;`,
           [req.body.customSelection, req.body.pollId]
         )
 
-        const insertIpPromise = client.query(
+        if (pollOptionResponse.rowCount > 0) {
+          res.status(403).json({ msg: 'Custom option already exists' })
+        } else {
+          const insertPollOptionPromise = pgClient.query(
+            `INSERT INTO pollOption(option, votes, "pollId") VALUES ($1, 1, $2);`,
+            [req.body.customSelection, req.body.pollId]
+          )
+
+          const insertIpPromise = pgClient.query(
+            `INSERT INTO ip(ip, "pollId") VALUES ($1, $2);`,
+            [req.clientIp, req.body.pollId]
+          )
+
+          await Promise.all([insertPollOptionPromise, insertIpPromise])
+
+          const response = await pgClient.query(
+            `SELECT * FROM poll p JOIN pollOption o ON p.id=o."pollId" WHERE p.id=$1;`,
+            [req.body.pollId]
+          )
+
+          res.json({ msg: 'Vote Submitted', poll: response.rows })
+        }
+      } else {
+        const updatePollVotePromise = pgClient.query(
+          `UPDATE pollOption SET votes = votes + 1 WHERE option=$1 AND "pollId"=$2;`,
+          [req.body.selection, req.body.pollId]
+        )
+
+        const insertIpPromise = pgClient.query(
           `INSERT INTO ip(ip, "pollId") VALUES ($1, $2);`,
           [req.clientIp, req.body.pollId]
         )
 
-        await Promise.all([insertPollOptionPromise, insertIpPromise])
+        await Promise.all([updatePollVotePromise, insertIpPromise])
 
-        const response = await client.query(
+        const response = await pgClient.query(
           `SELECT * FROM poll p JOIN pollOption o ON p.id=o."pollId" WHERE p.id=$1;`,
           [req.body.pollId]
         )
 
-        res.json({ msg: 'Vote Submitted', poll: response.rows })
+        res.json({ msg: 'Vote submitted', poll: response.rows })
       }
-    } else {
-      const updatePollVotePromise = client.query(
-        `UPDATE pollOption SET votes = votes + 1 WHERE option=$1 AND "pollId"=$2;`,
-        [req.body.selection, req.body.pollId]
-      )
-
-      const insertIpPromise = client.query(
-        `INSERT INTO ip(ip, "pollId") VALUES ($1, $2);`,
-        [req.clientIp, req.body.pollId]
-      )
-
-      await Promise.all([updatePollVotePromise, insertIpPromise])
-
-      const response = await client.query(
-        `SELECT * FROM poll p JOIN pollOption o ON p.id=o."pollId" WHERE p.id=$1;`,
-        [req.body.pollId]
-      )
-
-      res.json({ msg: 'Vote submitted', poll: response.rows })
     }
+  } catch (err) {
+    next(err)
   }
 
-  client.release()
+  pgClient.release()
 }
 
-export const deletePoll = async (req: Request, res: Response) => {
-  const client = await pool.connect()
+export const deletePoll = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  const pgClient = await pool.connect()
+  await redisClient.connect()
 
-  await client.query(`DELETE FROM poll WHERE id=$1`, [req.params.id])
+  try {
+    await redisClient.flushAll()
 
-  res.json({ msg: 'Poll deleted' })
+    await pgClient.query(`DELETE FROM poll WHERE id=$1`, [req.params.id])
 
-  client.release()
+    res.json({ msg: 'Poll deleted' })
+  } catch (err) {
+    next(err)
+  }
+
+  pgClient.release()
+  await redisClient.quit()
 }
