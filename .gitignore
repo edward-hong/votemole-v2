@@ -3,3 +3,4 @@ server/dist
 v1
 .secret
 .env
+coverage
